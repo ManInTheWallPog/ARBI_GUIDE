@@ -49,7 +49,7 @@ test("parses multiple local Arbitration runs and retains structured spawn points
   assert.equal(runs[1].missionType, "INTERCEPTION");
 
   const payload = await Parser.buildContribution(runs[0]);
-  assert.equal(payload.schema, "arbi-analyzer-run/v2");
+  assert.equal(payload.schema, "arbi-analyzer-run/v3");
   assert.equal(payload.sol_node, "SolNode130");
   assert.equal(payload.spawn_points.length, 2);
   assert.equal(payload.run_offset_seconds, runs[0].startTime);
@@ -73,9 +73,20 @@ test("parses multiple local Arbitration runs and retains structured spawn points
     drone_interval_count: Math.max(0, intervalTimestamps.length - 1),
     reward_cycles: runs[0].rotations,
     defense_waves: Object.keys(runs[0].waveStarts).length,
+    rotation_seconds: runs[0].rotationDurations.map((seconds) => Math.round(seconds * 1000) / 1000),
+    rotation_drones: runs[0].dronesPerRotation.map((count) => Math.trunc(count)),
+    wave_seconds: runs[0].waveDurations.map(([, seconds]) => Math.round(seconds * 1000) / 1000),
+    enemy_type_counts: Object.fromEntries(
+      Object.entries(runs[0].enemyTypes).filter(([, count]) => count > 0).slice(0, 60),
+    ),
     four_member_majority: false,
   });
   assert.match(payload.run_hash, /^(?:[a-f0-9]{64}|test-[a-f0-9]{8})$/);
+  assert.equal(payload.run_metrics.rotation_seconds.length, payload.run_metrics.rotation_drones.length,
+    "every rotation must carry both a duration and a drone count");
+  assert.ok(Object.keys(payload.run_metrics.enemy_type_counts).length > 0, "enemy composition must be contributed");
+  assert.ok(Object.values(payload.run_metrics.enemy_type_counts).every((count) => Number.isInteger(count) && count > 0));
+  assert.ok(Object.keys(payload.run_metrics.enemy_type_counts).length <= 60, "enemy composition is capped");
   const corrected = await Parser.buildContribution(runs[0], { blessedDroneKills: 3 });
   assert.equal(corrected.run_hash, payload.run_hash, "a Blessing correction must retain the original run identity");
   assert.equal(corrected.run_metrics.blessed_drone_kills, 3);
@@ -302,7 +313,7 @@ test("uses Survival mission events for active timing, reward cycles, extraction,
   assert.ok(run.saturation.abovePercent > 0);
   assert.ok(run.saturationPerRotation.every(Number.isFinite));
   const payload = await Parser.buildContribution(run);
-  assert.equal(payload.schema, "arbi-analyzer-run/v2");
+  assert.equal(payload.schema, "arbi-analyzer-run/v3");
   assert.deepEqual(payload.spawn_points, []);
   assert.equal(payload.observed_spawn_events, 0);
   const saturationTotals = Parser.helpers.calculateSaturationTotals(run, 30);
@@ -325,6 +336,12 @@ test("uses Survival mission events for active timing, reward cycles, extraction,
     drone_interval_count: Math.max(0, intervalTimestamps.length - 1),
     reward_cycles: 2,
     defense_waves: 0,
+    rotation_seconds: run.rotationDurations.map((seconds) => Math.round(seconds * 1000) / 1000),
+    rotation_drones: run.dronesPerRotation.map((count) => Math.trunc(count)),
+    wave_seconds: run.waveDurations.map(([, seconds]) => Math.round(seconds * 1000) / 1000),
+    enemy_type_counts: Object.fromEntries(
+      Object.entries(run.enemyTypes).filter(([, count]) => count > 0).slice(0, 60),
+    ),
     four_member_majority: false,
   });
   assert.ok(Math.abs(payload.run_metrics.high_enemy_seconds / payload.run_metrics.enemy_telemetry_seconds * 100 - run.saturation.abovePercent) < 0.001);

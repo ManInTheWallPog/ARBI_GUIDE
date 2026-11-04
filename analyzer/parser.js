@@ -2037,6 +2037,8 @@
     }));
   }
 
+  const MAX_ENEMY_TYPES = 60;
+
   async function buildContribution(run, options = {}) {
     const spawnEligible = ["DEFENSE", "INTERCEPTION"].includes(run.missionType);
     const spawnPoints = (spawnEligible ? Object.values(run.spawnPoints || {}) : [])
@@ -2095,12 +2097,25 @@
       defense_waves: run.missionType === "DEFENSE"
         ? Object.keys(run.waveStarts || {}).length
         : 0,
+      // Per-rotation and per-wave series, reduced to durations and counts.
+      // Drones per minute is derivable from the two, so it is not sent.
+      rotation_seconds: (run.rotationDurations || []).map((seconds) => round(seconds || 0, 3)),
+      rotation_drones: (run.dronesPerRotation || []).map((count) => Math.max(0, Math.trunc(count || 0))),
+      wave_seconds: (run.waveDurations || []).map((entry) => round((entry && entry[1]) || 0, 3)),
+      // Enemy unit types only: agent names, never player names. Already
+      // ordered by count, so the cap keeps the most common ones.
+      enemy_type_counts: Object.fromEntries(
+        Object.entries(run.enemyTypes || {})
+          .map(([name, count]) => [name, Math.trunc(Number(count) || 0)])
+          .filter(([, count]) => count > 0)
+          .slice(0, MAX_ENEMY_TYPES),
+      ),
       four_member_majority: run.fullSquadMajority === true,
     };
     const runHash = await sha256(stableStringify(identity));
     return {
       ...identity,
-      schema: "arbi-analyzer-run/v2",
+      schema: "arbi-analyzer-run/v3",
       run_metrics: runMetrics,
       run_hash: runHash,
     };

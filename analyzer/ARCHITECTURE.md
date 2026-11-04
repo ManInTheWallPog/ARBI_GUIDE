@@ -116,7 +116,27 @@ The exact submitted fields are:
   count inside
   `run_metrics`, plus the reduced run-eligibility boolean required by the
   current ingestion contract;
+- per-rotation durations and drone counts, and per-wave durations, as plain
+  number series; drones per minute is derivable from the first two and is not
+  sent;
+- enemy composition as unit-type counts, ordered by count and capped at 60
+  entries. These are agent names such as `EliteRifleLancer`, never player
+  names;
 - a canonical SHA-256 hash over the original spawn-identity fields.
+
+The last two groups arrived with `arbi-analyzer-run/v3`. They are what the
+Rotation Correlation, Rotation Clear Map and Enemy Composition panels are drawn
+from: without them a run read back from D1 can only be shown in part. They sit
+inside `run_metrics` and leave the identity block untouched, so `run_hash` is
+unchanged and existing rows still deduplicate against new submissions.
+
+Rolling v3 out means the Worker must accept the new `run_metrics` members
+before either client sends them, and must keep accepting `v2` bodies while the
+bot and the Pages bundle deploy separately. Order is not critical: a rejected
+contribution is retried with exponential backoff and never discarded, so a
+client that ships first simply stalls until the Worker catches up. Storing the
+new members needs a D1 migration; they are small, a real ten-rotation
+Interception run contributing about 1.5 KB in total.
 
 The v2 envelope deliberately keeps the original `arbi-solnode-spawns/v1`
 identity hash. Existing Defense/Interception rows therefore deduplicate instead

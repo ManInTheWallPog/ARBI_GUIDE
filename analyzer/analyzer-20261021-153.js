@@ -2014,7 +2014,6 @@
   function clearRuns() {
     importSequence += 1;
     globalThis.ArbitrationAlecaFrameImport?.cancel();
-    globalThis.ArbitrationDiscordImport?.cancel();
     state.runs = [];
     state.activeIndex = 0;
     state.activeSavedId = "";
@@ -2096,7 +2095,6 @@
   async function importFile(file, settleFocus = false, source = "file") {
     if (!file) return;
     if (source !== "alecaframe") globalThis.ArbitrationAlecaFrameImport?.cancel();
-    if (source !== "discord") globalThis.ArbitrationDiscordImport?.cancel();
     const sequence = ++importSequence;
     const isCurrent = () => sequence === importSequence;
     const status=$("#parseStatus");
@@ -3170,5 +3168,4 @@
   renderReport(null);
   void initializeSavedRuns();
   void globalThis.ArbitrationAlecaFrameImport?.start(importFile);
-  void globalThis.ArbitrationDiscordImport?.start(importFile);
 })();

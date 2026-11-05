@@ -136,7 +136,15 @@ bot and the Pages bundle deploy separately. Order is not critical: a rejected
 contribution is retried with exponential backoff and never discarded, so a
 client that ships first simply stalls until the Worker catches up. Storing the
 new members needs a D1 migration; they are small, a real ten-rotation
-Interception run contributing about 1.5 KB in total.
+Interception run contributing about 1.5 KB in total. `workers/README-v3.md`
+holds the migration, the three Worker call sites, and the deploy order.
+
+`submission.js` and `parser.js` ship in one Pages bundle but were pinned to the
+schema string independently, so advancing the contract in one silently closed
+the browser gate and counted every run `ineligible` instead of sending it. The
+submission tests now build a payload with the real parser and assert the real
+gate accepts it, and `workers/analyzer-ingest-v3.test.mjs` loads both modules
+so a third divergence fails there too.
 
 The v2 envelope deliberately keeps the original `arbi-solnode-spawns/v1`
 identity hash. Existing Defense/Interception rows therefore deduplicate instead
@@ -160,11 +168,13 @@ The cache namespace is versioned. A contract change may advance it once so
 already accepted hashes are reconciled without changing their canonical spawn
 identity.
 
-The current v10 namespace resubmits previously accepted runs once so D1 can
-reconcile finalized-window active time and drone-interval totals, along with
-the Blessing-eligible drone count and its server-derived Expected Vitus values.
-Historical reduced fields stay `NULL` until their original logs are analyzed
-again; missing values are never estimated or treated as zero.
+The current v11 namespace resubmits previously accepted runs once so D1 can
+reconcile the `v3` rotation, wave and enemy-composition series. The v10
+namespace before it did the same for finalized-window active time and
+drone-interval totals, along with the Blessing-eligible drone count and its
+server-derived Expected Vitus values. Historical reduced fields stay `NULL`
+until their original logs are analyzed again; missing values are never
+estimated or treated as zero.
 
 The site-only **Client had Fresher Blessing** toggle updates the report
 immediately and debounces its D1 correction for two seconds. Rapid toggles
@@ -218,6 +228,17 @@ It:
   retry queue);
 - returns `201 accepted`, `200 duplicate`, or a validation error;
 - never stores raw logs or user identifiers.
+
+A per-run read-back route, `GET /api/analyzer/spawns/run/<run_hash>`, is
+drafted in `workers/README-v3.md` but **not deployed**. It would let the
+Analyzer render a run it never parsed, which is what the Discord `/analyze`
+handoff needs when the log itself is not available to the browser. It reads the
+stored body back and overlays the `v3` series, so a run first stored under `v2`
+returns complete only after it has been re-analyzed. Unlike the averages
+aggregate it would return one run's `spawn_points` coordinates, because the
+overlay cannot be drawn without them; that is a wider read surface than
+anything the Worker exposes today and is called out there as a decision to
+confirm rather than assumed.
 
 The same Worker exposes a read-only
 `GET /api/analyzer/spawns/averages?sol_node=…` aggregate for the two visual

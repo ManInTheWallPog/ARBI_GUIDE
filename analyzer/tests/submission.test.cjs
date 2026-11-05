@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Submission = require("../submission.js");
+const Parser = require("../parser.js");
 
 function storage() {
   const values = new Map();
@@ -12,7 +13,7 @@ function storage() {
 
 function payload(hash = "a".repeat(64)) {
   return {
-    schema: "arbi-analyzer-run/v2",
+    schema: "arbi-analyzer-run/v3",
     sol_node: "SolNode130",
     level_path: "/Lotus/Levels/Example.level",
     mission_type: "DEFENSE",
@@ -34,6 +35,10 @@ function payload(hash = "a".repeat(64)) {
       drone_interval_count: 99,
       reward_cycles: 2,
       defense_waves: 6,
+      rotation_seconds: [285, 285],
+      rotation_drones: [50, 49],
+      wave_seconds: [40, 40, 40, 40, 40, 40],
+      enemy_type_counts: { EliteRifleLancer: 600, ChargerAgent: 400 },
       four_member_majority: true,
     },
     run_hash: hash,
@@ -134,4 +139,77 @@ test("accepts finalized-window drone intervals and rejects impossible totals", (
   const tooLongSpan = structuredClone(valid);
   tooLongSpan.run_metrics.drone_interval_span_seconds = tooLongSpan.run_metrics.mission_seconds + 1;
   assert.equal(Submission.isValidPayload(tooLongSpan), false);
+});
+
+// parser.js and submission.js ship in one Pages bundle but were pinned to the
+// schema string independently, so a contract bump could silently close this
+// gate and turn every run into an "ineligible" count. Bind them in a test.
+function defenseLog() {
+  const offset = 1;
+  const lines = [`${offset.toFixed(1)} Game [Info]: EliteAlertMission at SolNode130`];
+  lines.push(`${(offset + .1).toFixed(1)} Game [Info]: Level=/Lotus/Levels/GrineerAsteroidRelight/GrnDefenseOne.level`);
+  lines.push(`${(offset + 1).toFixed(1)} ThemedSquadOverlay.lua: Mission name: Arbitration: Lares (Mercury) - Defense`);
+  lines.push(`${(offset + 2).toFixed(1)} WaveDefend.lua: Starting wave 1 (32 simultaneous)`);
+  for (let index = 0; index < 48; index += 1) {
+    const time = offset + 3 + index * .8;
+    const npc = index < 7 ? "CorpusEliteShieldDroneAgent" : "ChargerAgent";
+    lines.push(`${time.toFixed(1)} AI [Info]: OnAgentCreated /Npc/${npc}${index + 1} AI [Info]: MonitoredTicking ${index + 1}`);
+    if (index < 12) {
+      const point = 293 + index % 2;
+      const x = point === 293 ? 47 : 15;
+      const z = point === 293 ? 50 : 64.5;
+      lines.push(`${(time + .01).toFixed(2)} WaveDefend.lua: Spawned a /Npc/ChargerAgent${index + 1} @ Vector(0,0,0), spawn point: /LayerGrnDefenseOne/NpcSpawnPoint${point} @ Vector(${x},0,${z})`);
+    }
+  }
+  lines.push(`${(offset + 42).toFixed(1)} WaveDefend.lua: Defense wave: 1`);
+  lines.push(`${(offset + 43).toFixed(1)} Created /Lotus/Interface/DefenseReward.swf`);
+  return lines.join("\n");
+}
+
+test("the submission gate accepts what parser.js actually builds", async () => {
+  const runs = Parser.parseText(defenseLog());
+  assert.ok(runs.length >= 1, "the fixture log should produce a run");
+  const built = await Parser.buildContribution(runs[0]);
+  assert.ok(built, "the fixture run should be eligible to contribute");
+  assert.equal(
+    Submission.isValidPayload(built),
+    true,
+    `submission.js rejected a payload parser.js built (schema ${built.schema})`,
+  );
+});
+
+test("the gate rejects a payload missing the v3 series", () => {
+  for (const field of ["rotation_seconds", "rotation_drones", "wave_seconds", "enemy_type_counts"]) {
+    const missing = payload();
+    delete missing.run_metrics[field];
+    assert.equal(Submission.isValidPayload(missing), false, `${field} should be required`);
+  }
+});
+
+test("the gate rejects impossible v3 series", () => {
+  const longerThanActive = payload();
+  longerThanActive.run_metrics.rotation_seconds = [570, 1];
+  assert.equal(Submission.isValidPayload(longerThanActive), false);
+
+  const mismatchedLengths = payload();
+  mismatchedLengths.run_metrics.rotation_drones = [50];
+  assert.equal(Submission.isValidPayload(mismatchedLengths), false);
+
+  const moreDronesThanKills = payload();
+  moreDronesThanKills.run_metrics.rotation_drones = [80, 80];
+  assert.equal(Submission.isValidPayload(moreDronesThanKills), false);
+
+  const overEnemySpawns = payload();
+  overEnemySpawns.run_metrics.enemy_type_counts = { EliteRifleLancer: 1001 };
+  assert.equal(Submission.isValidPayload(overEnemySpawns), false);
+
+  const tooManyTypes = payload();
+  tooManyTypes.run_metrics.enemy_type_counts = Object.fromEntries(
+    Array.from({ length: Submission.MAX_ENEMY_TYPES + 1 }, (_, index) => [`Agent${index}`, 1]),
+  );
+  assert.equal(Submission.isValidPayload(tooManyTypes), false);
+
+  const zeroCount = payload();
+  zeroCount.run_metrics.enemy_type_counts = { EliteRifleLancer: 0 };
+  assert.equal(Submission.isValidPayload(zeroCount), false);
 });

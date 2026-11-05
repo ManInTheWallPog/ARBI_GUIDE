@@ -2,11 +2,16 @@
   "use strict";
 
   const ENDPOINT = "/api/analyzer/spawns";
-  // v10 intentionally gets a fresh browser cache so previously accepted runs
-  // can reconcile finalized-window active-time and drone-interval totals under
-  // the same canonical hash when their original logs are analyzed again.
-  const CACHE_KEY = "arbi-analyzer-accepted-run-hashes-v10";
+  // v11 intentionally gets a fresh browser cache so previously accepted runs
+  // can reconcile the arbi-analyzer-run/v3 rotation, wave and enemy-composition
+  // series under the same canonical hash when their logs are analyzed again.
+  const CACHE_KEY = "arbi-analyzer-accepted-run-hashes-v11";
   const CACHE_LIMIT = 5000;
+  // Mirrors MAX_ENEMY_TYPES in parser.js.
+  const MAX_ENEMY_TYPES = 60;
+  // No real run has this many rotations or waves; the cap only bounds the body.
+  const MAX_SERIES_LENGTH = 400;
+  const MAX_ENEMY_TYPE_NAME = 120;
   const PRODUCTION_HOSTS = new Set(["arbi.guide"]);
 
   function isProductionHost(hostname = globalThis.location?.hostname || "") {
@@ -30,11 +35,44 @@
     try { storage.setItem(CACHE_KEY, JSON.stringify(hashes.slice(-CACHE_LIMIT))); } catch (_) { /* private mode/quota */ }
   }
 
+  function isNonNegativeSeries(value) {
+    return Array.isArray(value)
+      && value.length <= MAX_SERIES_LENGTH
+      && value.every((entry) => Number.isFinite(entry) && entry >= 0);
+  }
+
+  function isCountSeries(value) {
+    return Array.isArray(value)
+      && value.length <= MAX_SERIES_LENGTH
+      && value.every((entry) => Number.isInteger(entry) && entry >= 0);
+  }
+
+  function total(values) {
+    return values.reduce((sum, entry) => sum + entry, 0);
+  }
+
+  // Unit-type counts arrive as a plain object; reject anything carrying a
+  // prototype or non-own keys so the Worker never sees a surprising shape.
+  function isEnemyComposition(value, enemySpawns) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const names = Object.keys(value);
+    if (names.length > MAX_ENEMY_TYPES) return false;
+    let sum = 0;
+    for (const name of names) {
+      if (!name || name.length > MAX_ENEMY_TYPE_NAME) return false;
+      const count = value[name];
+      if (!Number.isInteger(count) || count < 1 || count > 100000000) return false;
+      sum += count;
+    }
+    return sum <= enemySpawns;
+  }
+
   function isValidPayload(payload) {
     const metrics = payload?.run_metrics;
     return Boolean(
       payload
-      && payload.schema === "arbi-analyzer-run/v2"
+      && payload.schema === "arbi-analyzer-run/v3"
       && /^(?:SolNode|ClanNode|SettlementNode)\d+$/.test(payload.sol_node || "")
       && typeof payload.mission_type === "string"
       && payload.mission_type.length > 0
@@ -82,6 +120,19 @@
       && metrics.reward_cycles >= 0
       && Number.isInteger(metrics.defense_waves)
       && metrics.defense_waves >= 0
+      // v3 series. Completed rotations are reward-to-reward active seconds, so
+      // they cannot outlast the pause-filtered active window. Per-rotation
+      // drone counts come from the same phases, hence the matching length, and
+      // may be absent when the log carries no reward or drone timestamps.
+      && isNonNegativeSeries(metrics.rotation_seconds)
+      && total(metrics.rotation_seconds) <= metrics.active_seconds + 0.05
+      && isCountSeries(metrics.rotation_drones)
+      && (metrics.rotation_drones.length === 0
+        || metrics.rotation_drones.length === metrics.rotation_seconds.length)
+      && total(metrics.rotation_drones) <= metrics.drone_kills
+      && isNonNegativeSeries(metrics.wave_seconds)
+      && total(metrics.wave_seconds) <= metrics.mission_seconds + 0.05
+      && isEnemyComposition(metrics.enemy_type_counts, metrics.enemy_spawns)
       && typeof metrics.four_member_majority === "boolean"
     );
   }
@@ -153,7 +204,7 @@
     return summary;
   }
 
-  const api = { ENDPOINT, CACHE_KEY, isProductionHost, acceptedHashes, rememberAccepted, isValidPayload, postPayload, submitRuns };
+  const api = { ENDPOINT, CACHE_KEY, MAX_ENEMY_TYPES, isProductionHost, acceptedHashes, rememberAccepted, isValidPayload, postPayload, submitRuns };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   globalThis.ArbitrationSpawnSubmission = api;
 })();
